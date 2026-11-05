@@ -199,27 +199,27 @@ fn find(path: String, st: St) -> Res<Option<NodeId>> {
 
 #[tauri::command]
 fn top_files(node: NodeId, limit: usize, st: St) -> Res<Vec<Item>> {
-    Ok(query::top_files(&current(&st)?, node, limit, 0))
+    Ok(query::top_files(&*current(&st)?, node, limit, 0))
 }
 
 #[tauri::command]
 fn hotspots(node: NodeId, limit: usize, st: St) -> Res<Vec<Item>> {
-    Ok(query::hotspots(&current(&st)?, node, limit))
+    Ok(query::hotspots(&*current(&st)?, node, limit))
 }
 
 #[tauri::command]
 fn file_types(node: NodeId, limit: usize, st: St) -> Res<Vec<TypeStat>> {
-    Ok(query::file_types(&current(&st)?, node, limit))
+    Ok(query::file_types(&*current(&st)?, node, limit))
 }
 
 #[tauri::command]
 fn search(node: NodeId, pattern: String, limit: usize, st: St) -> Res<Vec<Item>> {
-    Ok(query::search(&current(&st)?, node, &pattern, limit))
+    Ok(query::search(&*current(&st)?, node, &pattern, limit))
 }
 
 #[tauri::command]
 fn cleanup_candidates(node: NodeId, st: St) -> Res<Vec<Candidate>> {
-    Ok(cleanup::candidates(&current(&st)?, node, 16 << 20))
+    Ok(cleanup::candidates(&*current(&st)?, node, 16 << 20))
 }
 
 #[tauri::command]
