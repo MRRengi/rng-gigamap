@@ -6,6 +6,7 @@ pub mod diff;
 pub mod dupes;
 pub mod fmt;
 pub mod index;
+pub mod ipc;
 pub mod mft;
 pub mod query;
 pub mod requests;

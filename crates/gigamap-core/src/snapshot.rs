@@ -15,7 +15,16 @@ pub fn save(idx: &Index, path: &Path) -> Result<()> {
     let tmp = path.with_extension("tmp");
     {
         let f = std::fs::File::create(&tmp)?;
-        let mut w = zstd::Encoder::new(std::io::BufWriter::new(f), 3)?;
+        write_to(idx, std::io::BufWriter::new(f))?.flush()?;
+    }
+    std::fs::rename(tmp, path)?;
+    Ok(())
+}
+
+/// Serialize into any writer (file, pipe). Returns the inner writer.
+pub fn write_to<W: Write>(idx: &Index, out: W) -> Result<W> {
+    {
+        let mut w = zstd::Encoder::new(out, 3)?;
         w.write_all(MAGIC)?;
         put_str(&mut w, &idx.root_path)?;
         put_u32(&mut w, idx.sep as u32)?;
@@ -36,15 +45,17 @@ pub fn save(idx: &Index, path: &Path) -> Result<()> {
         put_slice(&mut w, &idx.alloc)?;
         put_slice(&mut w, &idx.mtime)?;
         w.write_all(&idx.flags)?;
-        w.finish()?.flush()?;
+        Ok(w.finish()?)
     }
-    std::fs::rename(tmp, path)?;
-    Ok(())
 }
 
 pub fn load(path: &Path) -> Result<Index> {
     let f = std::fs::File::open(path)?;
-    let mut r = zstd::Decoder::new(std::io::BufReader::new(f))?;
+    read_from(std::io::BufReader::new(f))
+}
+
+pub fn read_from<R: Read>(input: R) -> Result<Index> {
+    let mut r = zstd::Decoder::new(input)?;
     let mut m = [0u8; 5];
     r.read_exact(&mut m)?;
     if &m != MAGIC {

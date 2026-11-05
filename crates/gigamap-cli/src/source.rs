@@ -32,6 +32,9 @@ pub fn scan(target: &str, image: Option<&str>) -> Result<Index> {
     }
     if cfg!(windows) {
         if let Some(l) = drive_letter(target) {
+            if let Ok(i) = gigamap_core::ipc::scan_via_service(l) {
+                return Ok(i);
+            }
             match mft::scan_drive(l) {
                 Ok(i) => return Ok(i),
                 Err(e) => eprintln!("MFT scan unavailable ({e:#}), walking folders instead"),

@@ -36,11 +36,11 @@ jobs:
               with open(os.path.join(rng.choice(dirs), f"f{i}.bin"), "wb") as f:
                   f.write(os.urandom(n))
       - name: MFT vs folder walk
-        run: target\release\gigamap.exe selfcheck C:\gmtest
+        run: '.\target\release\gigamap.exe selfcheck C:\gmtest'
       - name: Full drive scan
-        run: target\release\gigamap.exe scan C: -n 12
+        run: '.\target\release\gigamap.exe scan C: -n 12'
       - name: Hotspots
-        run: target\release\gigamap.exe top C: -n 10
+        run: '.\target\release\gigamap.exe top C: -n 10'
       - name: MCP smoke test
         shell: bash
         run: |

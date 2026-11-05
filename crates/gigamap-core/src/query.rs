@@ -214,3 +214,47 @@ mod tests {
         assert!(glob(&"a*c?".chars().collect::<Vec<_>>(), &"abbbcd".chars().collect::<Vec<_>>()));
     }
 }
+
+/// Flat slice of a subtree for drawing a treemap: the biggest nodes first,
+/// up to `max_nodes`. `parent` indexes into the slice (-1 for the slice root).
+/// Space of nodes left out stays inside their parent as "small items".
+#[derive(Serialize, Default)]
+pub struct Slice {
+    pub id: Vec<NodeId>,
+    pub parent: Vec<i32>,
+    pub size: Vec<u64>,
+    pub dir: Vec<u8>,
+    pub name: Vec<String>,
+    pub ext: Vec<String>,
+}
+
+pub fn slice(idx: &Index, n: NodeId, max_nodes: usize) -> Slice {
+    let mut s = Slice::default();
+    let push = |s: &mut Slice, k: NodeId, p: i32| {
+        s.id.push(k);
+        s.parent.push(p);
+        s.size.push(idx.total_size[k as usize]);
+        s.dir.push(u8::from(idx.is_dir(k)));
+        s.name.push(idx.name(k).to_string());
+        s.ext.push(if idx.is_dir(k) { String::new() } else { idx.extension(k).to_ascii_lowercase() });
+    };
+    push(&mut s, n, -1);
+    let floor = idx.total_size[n as usize] / 2_000_000;
+    let mut heap: BinaryHeap<(u64, NodeId, i32)> = BinaryHeap::new();
+    for &k in idx.kids(n) {
+        heap.push((idx.total_size[k as usize], k, 0));
+    }
+    while let Some((size, k, p)) = heap.pop() {
+        if s.id.len() >= max_nodes || size <= floor || size == 0 {
+            break;
+        }
+        let me = s.id.len() as i32;
+        push(&mut s, k, p);
+        if idx.is_dir(k) {
+            for &c in idx.kids(k) {
+                heap.push((idx.total_size[c as usize], c, me));
+            }
+        }
+    }
+    s
+}

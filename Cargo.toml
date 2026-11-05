@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/gigamap-core", "crates/gigamap-cli"]
+exclude = ["app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

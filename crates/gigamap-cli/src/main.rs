@@ -1,5 +1,6 @@
 mod mcp;
 mod report;
+mod service;
 mod source;
 
 use anyhow::{bail, Result};
@@ -12,6 +13,8 @@ USAGE:
   gigamap top <target> [--image FILE] [-n N]
   gigamap export <target> [--image FILE]      tab-separated: path, size, files (folders only)
   gigamap mcp                                 MCP server on stdio (for coding agents)
+  gigamap service install|uninstall|--console  elevated helper that keeps scans UAC-free
+  gigamap selfcheck <folder>                  compare MFT scan with a folder walk
 
 <target> is a drive (C:) or a folder. Drives are read straight from the NTFS
 master file table when running elevated; otherwise folders are walked in parallel.
@@ -95,6 +98,10 @@ fn parse() -> Result<Args> {
 }
 
 fn run() -> Result<()> {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.first().map(String::as_str) == Some("service") {
+        return service::run(&raw[1..]);
+    }
     let a = parse()?;
     match a.cmd.as_str() {
         "scan" | "top" | "export" => {
