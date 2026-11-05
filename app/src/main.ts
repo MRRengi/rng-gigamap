@@ -290,7 +290,11 @@ async function inspector() {
   const isRoot = it.id === 0;
   const kids = it.is_dir ? await api.children(it.id, 40) : [];
   const date = it.mtime ? new Date(it.mtime * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—";
+  // Where "back" goes from here: from a selection back to the open folder, from the open folder to its parent.
+  const parentName = S.selected ? (S.folder?.id === 0 ? S.folder.path.replace(/\\$/, "") : S.folder?.name) : await parentLabel();
+  const showBack = !!S.selected || S.node !== 0;
   $("#insp").innerHTML = `
+    ${showBack ? `<button class="insp-back" data-act="back">${icon("back")}<span>${esc(parentName || "Back")}</span></button>` : ""}
     <div class="insp-head">
       <div class="insp-icon" style="background:${it.is_dir ? "var(--accent)" : color(kind)}">${icon(KIND_ICON[kind])}</div>
       <div class="insp-title"><b>${esc(isRoot ? it.path : it.name)}</b><span>${it.is_dir ? "Folder" : LABEL[kind]}</span></div>
@@ -314,8 +318,8 @@ async function inspector() {
            <div class="row-btns"><button class="btn ghost" data-act="cancel">Cancel</button><button class="btn danger" data-act="recycle">Move to Recycle Bin</button></div></div>`
         : `<button class="btn ghost" data-act="ask">${icon("trash")}Move to Recycle Bin…</button>`}
     </div>
-    ${kids.length ? `<div class="insp-list-title">Inside</div><div class="insp-list">${kids
-      .map((k) => `<div class="row" data-path="${esc(k.path)}" data-dir="${k.is_dir ? 1 : 0}" data-id="${k.id}">
+    ${kids.length ? `<div class="insp-list-title">Inside</div><div class="insp-list">${showBack && !S.selected ? `<div class="row up-row" data-act="back"><span class="fold">${icon("back")}</span><div class="name"><b>..</b></div><div class="size"></div></div>` : ""}${kids
+      .map((k) => `<div class="row" data-path="${esc(k.path)}" data-dir="${k.is_dir ? 1 : 0}" data-id="${k.id}" ${k.is_dir ? 'data-nav="1"' : ""}>
         ${mark(k.name, k.is_dir)}
         <div class="name"><b>${esc(k.name)}</b></div>
         <div class="size">${size(k.size)}</div></div>`)
@@ -323,6 +327,11 @@ async function inspector() {
   $("#insp").querySelectorAll<HTMLButtonElement>("[data-act]").forEach((b) =>
     b.addEventListener("click", async () => {
       const a = b.dataset.act;
+      if (a === "back") {
+        if (S.selected) { S.selected = null; S.confirm = false; map.select(-1); inspector(); }
+        else up();
+        return;
+      }
       if (a === "open" && S.selected) open(S.selected.id, S.slice ? map.rectOf(S.slice.id.indexOf(S.selected.id)) : undefined);
       if (a === "reveal") api.reveal(it.path);
       if (a === "copy") {
@@ -345,7 +354,21 @@ async function inspector() {
       }
     }),
   );
+  // In "Inside", a folder opens on a single click; files just get selected.
+  $("#insp").querySelectorAll<HTMLElement>(".row[data-nav]").forEach((r) =>
+    r.addEventListener("click", (e) => {
+      e.stopImmediatePropagation();
+      open(Number(r.dataset.id));
+    }, true),
+  );
   bindRows($("#insp"));
+}
+
+async function parentLabel(): Promise<string> {
+  if (S.node === 0) return "";
+  const trail = await api.ancestors(S.node);
+  const p = trail[trail.length - 2];
+  return p ? (p.id === 0 ? p.path.replace(/\\$/, "") : p.name) : "";
 }
 
 function bindRows(scope: HTMLElement) {

@@ -245,6 +245,16 @@ svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none;
 
 /* ---------- inspector ---------- */
 .inspector { border-left: 0.5px solid var(--line); padding: 4px 16px 16px; display: flex; flex-direction: column; min-height: 0; gap: 14px; }
+.insp-back {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  margin: 6px 0 -6px -8px; padding: 5px 10px 5px 8px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--accent); font: 500 13px var(--font);
+  transition: background-color 120ms ease, transform 140ms var(--ease-out);
+}
+.insp-back:hover { background: var(--accent-soft); }
+.insp-back:active { transform: scale(0.97); }
+.insp-back span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.up-row b { color: var(--ink-2); }
 .insp-head { display: flex; gap: 12px; align-items: flex-start; padding-top: 6px; }
 .insp-icon { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; flex: none; color: #fff; box-shadow: inset 0 0.5px 0 rgba(255,255,255,0.4), 0 2px 6px rgba(0,0,0,0.12); }
 .insp-icon svg.i { width: 20px; height: 20px; }
