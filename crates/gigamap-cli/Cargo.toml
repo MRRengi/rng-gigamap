@@ -1,0 +1,14 @@
+[package]
+name = "gigamap-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "gigamap"
+path = "src/main.rs"
+
+[dependencies]
+gigamap-core = { path = "../gigamap-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true

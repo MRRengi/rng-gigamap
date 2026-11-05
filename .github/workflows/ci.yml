@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --workspace --release
+      - name: Build
+        run: cargo build --release -p gigamap-cli
+      - name: Test tree
+        shell: python
+        run: |
+          import os, random
+          rng = random.Random(1)
+          root = r"C:\gmtest"
+          dirs = [root]
+          for i in range(300):
+              d = os.path.join(rng.choice(dirs), f"Папка {i}" if i % 3 else f"dir_{i}")
+              os.makedirs(d, exist_ok=True)
+              dirs.append(d)
+          for i in range(20000):
+              n = rng.choice([0, 10, 700, 5000, 70000, 1 << 20])
+              with open(os.path.join(rng.choice(dirs), f"f{i}.bin"), "wb") as f:
+                  f.write(os.urandom(n))
+      - name: MFT vs folder walk
+        run: target\release\gigamap.exe selfcheck C:\gmtest
+      - name: Full drive scan
+        run: target\release\gigamap.exe scan C: -n 12
+      - name: Hotspots
+        run: target\release\gigamap.exe top C: -n 10
+      - name: MCP smoke test
+        shell: bash
+        run: |
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"disk_overview","arguments":{"path":"C:"}}}' \
+            '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"cleanup_candidates","arguments":{"path":"C:"}}}' \
+            | target/release/gigamap.exe mcp | tee mcp.out
+          grep -q '"id":3' mcp.out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gigamap-cli-windows
+          path: target/release/gigamap.exe
+
+  ntfs-bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y ntfs-3g
+      - run: cargo test --workspace --release
+      - run: cargo build --release -p gigamap-cli
+      - name: NTFS ground truth
+        run: sudo python3 bench/ntfs.py --files 4000
+      - name: NTFS throughput
+        run: sudo python3 bench/ntfs.py --files 150000 --tiny

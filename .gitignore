@@ -1,0 +1,7 @@
+/target
+node_modules/
+dist/
+*.gmap
+*.img
+app/src-tauri/target
+app/src-tauri/gen
