@@ -39,7 +39,7 @@ function shell() {
         <nav class="crumbs" id="crumbs" aria-label="Location"></nav>
         <div class="tool-group">
           <label class="search">${icon("search")}<input id="q" placeholder="Search names" spellcheck="false" /><kbd>Ctrl F</kbd></label>
-          <button class="btn icon ghost" id="up" title="Up one level (Backspace)" aria-label="Up one level">${icon("up")}</button>
+          <button class="btn" id="up" title="Up one level (Backspace, Alt+Left or the mouse back button)">${icon("back")}Up</button>
           <button class="btn" id="rescan" title="Rescan (F5)">${icon("refresh")}Rescan</button>
         </div>
         <div class="caption">
@@ -103,6 +103,10 @@ function shell() {
     }, 180);
   });
   window.addEventListener("keydown", keys);
+  // Mouse back button goes up a level, like Explorer.
+  window.addEventListener("mouseup", (e) => {
+    if (e.button === 3) { e.preventDefault(); up(); }
+  });
 }
 
 // ---------- treemap ----------
@@ -162,6 +166,11 @@ async function scan(target: string, keepPlace = false) {
   await open(back ?? 0);
 }
 
+function syncUp() {
+  const b = document.querySelector<HTMLButtonElement>("#up");
+  if (b) b.disabled = !S.info || S.node === 0;
+}
+
 async function open(node: number, from?: { x: number; y: number; w: number; h: number }, reverse = false) {
   const [slice, trail] = await Promise.all([api.tree(node, 24000), api.ancestors(node)]);
   if (from) await map.zoomFrom(from, reverse);
@@ -172,6 +181,7 @@ async function open(node: number, from?: { x: number; y: number; w: number; h: n
   S.confirm = false;
   map.set(slice);
   crumbs(trail);
+  syncUp();
   inspector();
   panel();
 }
@@ -506,6 +516,7 @@ function keys(e: KeyboardEvent) {
 }
 
 shell();
+syncUp();
 setupMap();
 setTab("largest");
 loadDrives();
