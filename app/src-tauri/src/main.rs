@@ -241,13 +241,54 @@ async fn duplicates(node: NodeId, min_mb: u64, st: St<'_>) -> Res<Vec<DupeGroup>
 fn reveal(path: String) -> Res<()> {
     #[cfg(windows)]
     {
-        std::process::Command::new("explorer").arg(format!("/select,{path}")).spawn().map_err(err)?;
+        // Shell API opens the parent folder with the item selected; no command-line quoting involved.
+        let p = path.clone();
+        let ok = std::thread::spawn(move || shell_select(&p)).join().unwrap_or(false);
+        if !ok {
+            use std::os::windows::process::CommandExt;
+            std::process::Command::new("explorer.exe")
+                .raw_arg(format!("/select,\"{}\"", path.trim_end_matches('\\')))
+                .spawn()
+                .map_err(err)?;
+        }
     }
     #[cfg(not(windows))]
     {
         let _ = path;
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn shell_select(path: &str) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "ole32")]
+    extern "system" {
+        fn CoInitializeEx(reserved: *mut core::ffi::c_void, coinit: u32) -> i32;
+        fn CoUninitialize();
+    }
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ILCreateFromPathW(path: *const u16) -> *mut core::ffi::c_void;
+        fn ILFree(pidl: *mut core::ffi::c_void);
+        fn SHOpenFolderAndSelectItems(folder: *const core::ffi::c_void, count: u32, items: *const *const core::ffi::c_void, flags: u32) -> i32;
+    }
+    let w: Vec<u16> = std::ffi::OsStr::new(path).encode_wide().chain(Some(0)).collect();
+    unsafe {
+        let hr_init = CoInitializeEx(std::ptr::null_mut(), 0x2); // apartment-threaded
+        let pidl = ILCreateFromPathW(w.as_ptr());
+        let ok = if pidl.is_null() {
+            false
+        } else {
+            let hr = SHOpenFolderAndSelectItems(pidl, 0, std::ptr::null(), 0);
+            ILFree(pidl);
+            hr >= 0
+        };
+        if hr_init >= 0 {
+            CoUninitialize();
+        }
+        ok
+    }
 }
 
 #[tauri::command]

@@ -333,7 +333,10 @@ async function inspector() {
         return;
       }
       if (a === "open" && S.selected) open(S.selected.id, S.slice ? map.rectOf(S.slice.id.indexOf(S.selected.id)) : undefined);
-      if (a === "reveal") api.reveal(it.path);
+      if (a === "reveal") {
+        try { await api.reveal(it.path); }
+        catch (e) { b.innerHTML = `${icon("reveal")}${esc(String(e))}`; }
+      }
       if (a === "copy") {
         await navigator.clipboard?.writeText(it.path);
         b.innerHTML = `${icon("copy")}Copied`;
