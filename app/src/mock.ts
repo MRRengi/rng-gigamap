@@ -123,6 +123,17 @@ export async function mockInvoke(cmd: string, a: Record<string, any>): Promise<u
     case "top_files": return [...sub(n)].filter((i) => !nodes[i].dir).sort((x, y) => nodes[y].size - nodes[x].size).slice(0, a.limit).map(item);
     case "hotspots": return [...sub(n)].filter((i) => i !== n && nodes[i].dir && nodes[i].kids.every((k) => !nodes[k].dir)).sort((x, y) => nodes[y].total - nodes[x].total).slice(0, a.limit).map(item);
     case "file_types": { const m = new Map<string, { size: number; files: number }>(); for (const i of sub(n)) if (!nodes[i].dir) { const e = m.get(nodes[i].ext) ?? { size: 0, files: 0 }; e.size += nodes[i].size; e.files++; m.set(nodes[i].ext, e); } return [...m].map(([ext, v]) => ({ ext, ...v })).sort((x, y) => y.size - x.size).slice(0, a.limit); }
+    case "ext_folders": {
+      const want = String(a.ext).toLowerCase();
+      const sz = new Map<number, [number, number]>();
+      for (const i of sub(n)) if (!nodes[i].dir && nodes[i].ext === want) { let p = nodes[i].parent; while (p >= 0) { const v = sz.get(p) ?? [0, 0]; v[0] += nodes[i].size; v[1]++; sz.set(p, v); if (p === n) break; p = nodes[p].parent; } }
+      const own = (i: number) => sz.get(i)?.[0] ?? 0;
+      const total = own(n); if (!total) return [];
+      const cands = [...sz.keys()].filter((k) => own(k) >= total / 500 && Math.max(0, ...nodes[k].kids.filter((c) => nodes[c].dir).map(own)) * 10 < own(k) * 7).sort((x, y) => own(y) - own(x));
+      const anc = (x: number, y: number) => { while (y >= 0) { if (y === x) return true; y = nodes[y].parent; } return false; };
+      const chosen: number[] = []; for (const c of cands) { if (chosen.length >= a.limit) break; if (!chosen.some((x) => anc(x, c) || anc(c, x))) chosen.push(c); }
+      return chosen.map((k) => ({ item: item(k), size: own(k), files: sz.get(k)![1] }));
+    }
     case "search": { const q = String(a.pattern).toLowerCase().replace(/\*/g, ""); return [...sub(n)].filter((i) => i && nodes[i].name.toLowerCase().includes(q)).sort((x, y) => nodes[y].total - nodes[x].total).slice(0, a.limit).map(item); }
     case "cleanup_candidates": {
       const rules: [string, string, string, string][] = [["Library", "Unity Library", "Unity rebuilds it on project open", "Safe"], ["node_modules", "Node packages", "reinstalled by npm install", "Safe"], ["target", "Rust target", "cargo build output", "Safe"], ["Cache", "Browser cache", "browser re-downloads it", "Safe"], ["_cacache", "npm cache", "re-downloaded on demand", "Safe"], ["Temp", "Temp files", "temporary files", "Review"], ["Download", "Windows Update cache", "old update packages", "Review"], ["Builds", "Unity builds", "old player builds", "Review"], ["$Recycle.Bin", "Recycle Bin", "already deleted files", "Review"], ["hiberfil.sys", "Hibernation file", "managed by Windows (powercfg /h off)", "System"], ["pagefile.sys", "Page file", "managed by Windows", "System"]];

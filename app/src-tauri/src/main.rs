@@ -3,7 +3,7 @@
 use gigamap_core::cleanup::{self, Candidate};
 use gigamap_core::diff::{self, Growth};
 use gigamap_core::dupes::{self, DupeGroup};
-use gigamap_core::query::{self, Item, Slice, TypeStat};
+use gigamap_core::query::{self, ExtFolder, Item, Slice, TypeStat};
 use gigamap_core::requests::{self, DeleteRequest};
 use gigamap_core::{ipc, mft, snapshot, walk, Index, NodeId};
 use serde::Serialize;
@@ -213,6 +213,11 @@ fn file_types(node: NodeId, limit: usize, st: St) -> Res<Vec<TypeStat>> {
 }
 
 #[tauri::command]
+fn ext_folders(node: NodeId, ext: String, limit: usize, st: St) -> Res<Vec<ExtFolder>> {
+    Ok(query::ext_folders(&*current(&st)?, node, &ext, limit))
+}
+
+#[tauri::command]
 fn search(node: NodeId, pattern: String, limit: usize, st: St) -> Res<Vec<Item>> {
     Ok(query::search(&*current(&st)?, node, &pattern, limit))
 }
@@ -320,6 +325,7 @@ fn main() {
             top_files,
             hotspots,
             file_types,
+            ext_folders,
             search,
             cleanup_candidates,
             growth,

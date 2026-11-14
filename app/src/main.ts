@@ -16,6 +16,7 @@ const S = {
   scanning: false,
   confirm: false,
   query: "",
+  typeExt: null as string | null,
 };
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -394,6 +395,7 @@ function bindRows(scope: HTMLElement) {
 
 // ---------- lower panel ----------
 function setTab(t: Tab) {
+  if (t !== S.tab) S.typeExt = null;
   S.tab = t;
   const btns = [...document.querySelectorAll<HTMLButtonElement>("[data-tab]")];
   btns.forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
@@ -433,11 +435,23 @@ async function panel() {
       `<div class="group-head">Largest files</div>` +
       files.map((f) => row({ path: f.path, name: f.name, dir: false, right: size(f.size), bar: f.size / scope, barColor: rowIcon(f) })).join("");
     msg = `in ${S.folder?.name || S.folder?.path}`;
+  } else if (S.tab === "types" && S.typeExt !== null) {
+    const ext = S.typeExt;
+    const k = kindOf(ext);
+    const rows = await api.extFolders(node, ext, 60);
+    const total = rows.reduce((s, r) => s + r.size, 0);
+    const mx = Math.max(1, ...rows.map((r) => r.size));
+    msg = `${ext ? "." + ext : "No extension"} by folder`;
+    html = `<div class="row type-back" data-typeback><span class="fold">${icon("back")}</span>
+        <div class="name"><b>All types</b><span class="path" style="direction:ltr">${ext ? "." + esc(ext) : "No extension"} · top folders hold ${size(total)}</span></div><div></div><div></div></div>` +
+      (rows.length
+        ? rows.map((r) => row({ path: r.item.path, name: r.item.name || r.item.path, dir: true, right: size(r.size), bar: r.size / mx, barColor: color(k), extra: `<span class="tag system">${r.files.toLocaleString()} files</span>` })).join("")
+        : `<div class="empty"><b>Nothing here</b>No files of this type in this folder.</div>`);
   } else if (S.tab === "types") {
     const types = await api.types(node, 40);
     html = types.map((t) => {
       const k = kindOf(t.ext);
-      return `<div class="row"><span class="swatch" style="background:${color(k)}"></span>
+      return `<div class="row type-row" data-ext="${esc(t.ext)}" title="Show the folders where these files live"><span class="swatch" style="background:${color(k)}"></span>
         <div class="name"><b>${t.ext ? "." + esc(t.ext) : "No extension"}</b><span class="path" style="direction:ltr">${LABEL[k]} · ${t.files.toLocaleString()} files</span></div>
         <div class="bar"><i style="width:${Math.max(1.5, (t.size * 100) / scope).toFixed(1)}%;background:${color(k)}"></i></div>
         <div class="size">${size(t.size)}</div></div>`;
@@ -482,6 +496,10 @@ async function panel() {
   list.innerHTML = html;
   list.scrollTop = 0;
   bindRows(list);
+  list.querySelectorAll<HTMLElement>("[data-ext]").forEach((r) =>
+    r.addEventListener("click", () => { S.typeExt = r.dataset.ext ?? ""; panel(); }),
+  );
+  list.querySelector<HTMLElement>("[data-typeback]")?.addEventListener("click", () => { S.typeExt = null; panel(); });
 }
 
 // ---------- agent delete requests ----------

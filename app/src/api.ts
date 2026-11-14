@@ -9,6 +9,7 @@ export interface ScanInfo {
 export interface Item { id: number; path: string; name: string; is_dir: boolean; size: number; alloc: number; files: number; mtime: number }
 export interface Slice { id: number[]; parent: number[]; size: number[]; dir: number[]; name: string[]; ext: string[] }
 export interface TypeStat { ext: string; size: number; files: number }
+export interface ExtFolder { item: Item; size: number; files: number }
 export interface Candidate { id: number; path: string; size: number; kind: string; why: string; safety: "Safe" | "Review" | "System" }
 export interface Change { path: string; before: number; after: number; delta: number; is_new: boolean }
 export interface Growth { since: number; now: number; total_delta: number; grown: Change[]; shrunk: Change[]; new_files: Change[] }
@@ -35,6 +36,7 @@ export const api = {
   topFiles: (node: number, limit: number) => call<Item[]>("top_files", { node, limit }),
   hotspots: (node: number, limit: number) => call<Item[]>("hotspots", { node, limit }),
   types: (node: number, limit: number) => call<TypeStat[]>("file_types", { node, limit }),
+  extFolders: (node: number, ext: string, limit: number) => call<ExtFolder[]>("ext_folders", { node, ext, limit }),
   search: (node: number, pattern: string, limit: number) => call<Item[]>("search", { node, pattern, limit }),
   cleanup: (node: number) => call<Candidate[]>("cleanup_candidates", { node }),
   growth: () => call<Growth | null>("growth"),

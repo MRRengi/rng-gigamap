@@ -1081,7 +1081,7 @@ dependencies = [
 
 [[package]]
 name = "gigamap-app"
-version = "0.1.3"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "gigamap-core",
@@ -1093,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "gigamap-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "blake3",

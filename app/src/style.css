@@ -320,3 +320,8 @@ svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none;
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 1ms !important; animation-duration: 1ms !important; }
 }
+
+.type-row, .type-back { cursor: pointer; }
+.type-row .size::after { content: "›"; margin-left: 8px; color: var(--ink-3); }
+.type-back b { color: var(--accent); }
+.type-back .fold { color: var(--accent); }

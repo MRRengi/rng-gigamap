@@ -80,6 +80,7 @@ fn tools() -> Vec<Value> {
         tool("folder_breakdown", "Direct children of a folder, largest first, with share of the parent.", json!({"path": path_prop(), "limit": {"type":"integer","default":15}}), &["path"]),
         tool("top_items", "Largest files and heaviest folders (hotspots, not every ancestor) under a path.", json!({"path": path_prop(), "limit": {"type":"integer","default":15}}), &[]),
         tool("file_types", "Space by file extension under a path.", json!({"path": path_prop(), "limit": {"type":"integer","default":15}}), &[]),
+        tool("type_folders", "Where one file type takes space: folders holding the most bytes of an extension (e.g. png), at a useful level, never overlapping.", json!({"ext": {"type":"string","description":"Extension like png or .png"}, "path": path_prop(), "limit": {"type":"integer","default":15}}), &["ext"]),
         tool("growth", "What grew or shrank since an earlier scan, plus big files changed since then.", json!({"path": path_prop(), "since": {"type":"string","description":"'last' (default) or a date YYYY-MM-DD"}}), &[]),
         tool("cleanup_candidates", "Regenerable build output, caches and temp folders (node_modules, Unity Library, cargo target, browser caches...) with a safety level.", json!({"path": path_prop(), "limit": {"type":"integer","default":20}}), &[]),
         tool("find_duplicates", "Identical files (size, then content hash). Reads file contents, can take a while on big scopes.", json!({"path": path_prop(), "min_size_mb": {"type":"integer","default":50}, "limit": {"type":"integer","default":10}}), &[]),
@@ -146,6 +147,18 @@ impl State {
             "file_types" => {
                 let (i, n) = self.index_for(path, false)?;
                 Ok(report::types(&self.cache[i], n, arg_usize(a, "limit", 15)))
+            }
+            "type_folders" => {
+                let ext = a.get("ext").and_then(Value::as_str).ok_or_else(|| anyhow!("ext is required"))?;
+                let (i, n) = self.index_for(path, false)?;
+                let rows = query::ext_folders(&self.cache[i], n, ext, arg_usize(a, "limit", 15));
+                if rows.is_empty() {
+                    return Ok(format!("no .{} files here", ext.trim_start_matches('.')));
+                }
+                Ok(rows
+                    .iter()
+                    .map(|r| format!("{:>9}  {}  ({} files)\n", fmt::size(r.size), r.item.path, r.files))
+                    .collect())
             }
             "cleanup_candidates" => {
                 let (i, n) = self.index_for(path, false)?;

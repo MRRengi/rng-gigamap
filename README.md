@@ -52,7 +52,7 @@ Point your agent at the `gigamap` CLI that comes with the app:
 Claude Code: `claude mcp add gigamap -- "C:\Program Files\Gigamap\gigamap.exe" mcp`
 
 Tools: `disk_overview`, `folder_breakdown`, `top_items`, `file_types`, `growth`,
-`cleanup_candidates`, `find_duplicates`, `search`, `rescan`, `request_delete`, `delete_status`.
+`type_folders`, `cleanup_candidates`, `find_duplicates`, `search`, `rescan`, `request_delete`, `delete_status`.
 
 Agents can't delete anything on their own. `request_delete` shows a card in the
 Gigamap window; files move to the Recycle Bin only if you press the button.
