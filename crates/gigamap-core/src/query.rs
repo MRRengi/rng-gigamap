@@ -267,59 +267,24 @@ pub struct ExtFolder {
     pub files: u32,
 }
 
-/// Where one file type lives: folders holding the most bytes of `ext`, picked at a
-/// useful level (a folder that only wraps one child folder is skipped) and never
-/// overlapping, so the sizes add up.
+/// Where one file type lives: every folder that directly holds files of `ext`,
+/// with the bytes and count of those files, largest first. Folders never overlap
+/// (each file counts once, in its own folder), so the sizes add up.
 pub fn ext_folders(idx: &Index, scope: NodeId, ext: &str, limit: usize) -> Vec<ExtFolder> {
-    let n = idx.len();
-    let mut sz = vec![0u64; n];
-    let mut cnt = vec![0u32; n];
     let want = ext.trim_start_matches('.').to_ascii_lowercase();
+    let mut by_dir: HashMap<NodeId, (u64, u32)> = HashMap::new();
     for k in idx.subtree(scope) {
         if idx.is_dir(k) || !idx.extension(k).eq_ignore_ascii_case(&want) {
             continue;
         }
-        let s = idx.size[k as usize];
-        let mut p = idx.parent[k as usize];
-        let mut guard = 0;
-        while p != crate::index::NONE && guard < 4096 {
-            sz[p as usize] += s;
-            cnt[p as usize] += 1;
-            if p == scope {
-                break;
-            }
-            p = idx.parent[p as usize];
-            guard += 1;
-        }
+        let e = by_dir.entry(idx.parent[k as usize]).or_default();
+        e.0 += idx.size[k as usize];
+        e.1 += 1;
     }
-    let total = sz[scope as usize];
-    if total == 0 {
-        return Vec::new();
-    }
-    let floor = (total / 500).max(1);
-    let mut cands: Vec<NodeId> = idx
-        .subtree(scope)
-        .filter(|&k| idx.is_dir(k) && sz[k as usize] >= floor)
-        .filter(|&k| {
-            let own = sz[k as usize];
-            let biggest = idx.kids(k).iter().filter(|&&c| idx.is_dir(c)).map(|&c| sz[c as usize]).max().unwrap_or(0);
-            biggest * 10 < own * 7
-        })
-        .collect();
-    cands.sort_unstable_by(|a, b| sz[*b as usize].cmp(&sz[*a as usize]));
-    let mut chosen: Vec<NodeId> = Vec::new();
-    for c in cands {
-        if chosen.len() >= limit {
-            break;
-        }
-        if !chosen.iter().any(|&x| idx.is_ancestor(x, c) || idx.is_ancestor(c, x)) {
-            chosen.push(c);
-        }
-    }
-    chosen
-        .into_iter()
-        .map(|k| ExtFolder { item: idx.item(k), size: sz[k as usize], files: cnt[k as usize] })
-        .collect()
+    let mut v: Vec<(NodeId, u64, u32)> = by_dir.into_iter().map(|(d, (s, c))| (d, s, c)).collect();
+    v.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    v.truncate(limit);
+    v.into_iter().map(|(d, size, files)| ExtFolder { item: idx.item(d), size, files }).collect()
 }
 
 #[cfg(test)]
@@ -328,7 +293,7 @@ mod ext_tests {
     use crate::index::{flag, IndexBuilder, ScanMethod};
 
     #[test]
-    fn png_folders_collapse_to_useful_level() {
+    fn png_folders_lists_every_folder() {
         let mut b = IndexBuilder::new("E:\\", '\\', ScanMethod::Walk);
         let proj = b.push(0, "Project", 0, 0, 0, flag::DIR);
         let shots = b.push(proj, "screenshots", 0, 0, 0, flag::DIR);
@@ -341,11 +306,12 @@ mod ext_tests {
         b.push(art, "big.png", 30 << 20, 0, 0, 0);
         b.push(art, "clip.mp4", 900 << 20, 0, 0, 0);
         let i = b.finish(std::time::Instant::now());
-        let f = ext_folders(&i, 0, ".PNG", 10);
-        assert_eq!(f[0].item.name, "screenshots");
-        assert_eq!(f[0].size, 100 << 20);
-        assert_eq!(f[0].files, 100);
-        assert_eq!(f[1].item.name, "Art");
-        assert_eq!(f[1].size, 30 << 20);
+        let f = ext_folders(&i, 0, ".PNG", 1000);
+        assert_eq!(f.len(), 51);
+        assert_eq!(f[0].item.name, "Art");
+        assert_eq!(f[0].size, 30 << 20);
+        assert_eq!(f[0].files, 1);
+        assert_eq!(f[1].size, 2 << 20);
+        assert_eq!(f[1].files, 2);
     }
 }

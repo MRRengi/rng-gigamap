@@ -438,12 +438,12 @@ async function panel() {
   } else if (S.tab === "types" && S.typeExt !== null) {
     const ext = S.typeExt;
     const k = kindOf(ext);
-    const rows = await api.extFolders(node, ext, 60);
+    const rows = await api.extFolders(node, ext, 2000);
     const total = rows.reduce((s, r) => s + r.size, 0);
     const mx = Math.max(1, ...rows.map((r) => r.size));
-    msg = `${ext ? "." + ext : "No extension"} by folder`;
+    msg = `${ext ? "." + ext : "No extension"} in ${rows.length.toLocaleString()}${rows.length >= 2000 ? "+" : ""} folders`;
     html = `<div class="row type-back" data-typeback><span class="fold">${icon("back")}</span>
-        <div class="name"><b>All types</b><span class="path" style="direction:ltr">${ext ? "." + esc(ext) : "No extension"} · top folders hold ${size(total)}</span></div><div></div><div></div></div>` +
+        <div class="name"><b>All types</b><span class="path" style="direction:ltr">${ext ? "." + esc(ext) : "No extension"} · ${size(total)} in the folders below</span></div><div></div><div></div></div>` +
       (rows.length
         ? rows.map((r) => row({ path: r.item.path, name: r.item.name || r.item.path, dir: true, right: size(r.size), bar: r.size / mx, barColor: color(k), extra: `<span class="tag system">${r.files.toLocaleString()} files</span>` })).join("")
         : `<div class="empty"><b>Nothing here</b>No files of this type in this folder.</div>`);

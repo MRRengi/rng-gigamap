@@ -125,14 +125,9 @@ export async function mockInvoke(cmd: string, a: Record<string, any>): Promise<u
     case "file_types": { const m = new Map<string, { size: number; files: number }>(); for (const i of sub(n)) if (!nodes[i].dir) { const e = m.get(nodes[i].ext) ?? { size: 0, files: 0 }; e.size += nodes[i].size; e.files++; m.set(nodes[i].ext, e); } return [...m].map(([ext, v]) => ({ ext, ...v })).sort((x, y) => y.size - x.size).slice(0, a.limit); }
     case "ext_folders": {
       const want = String(a.ext).toLowerCase();
-      const sz = new Map<number, [number, number]>();
-      for (const i of sub(n)) if (!nodes[i].dir && nodes[i].ext === want) { let p = nodes[i].parent; while (p >= 0) { const v = sz.get(p) ?? [0, 0]; v[0] += nodes[i].size; v[1]++; sz.set(p, v); if (p === n) break; p = nodes[p].parent; } }
-      const own = (i: number) => sz.get(i)?.[0] ?? 0;
-      const total = own(n); if (!total) return [];
-      const cands = [...sz.keys()].filter((k) => own(k) >= total / 500 && Math.max(0, ...nodes[k].kids.filter((c) => nodes[c].dir).map(own)) * 10 < own(k) * 7).sort((x, y) => own(y) - own(x));
-      const anc = (x: number, y: number) => { while (y >= 0) { if (y === x) return true; y = nodes[y].parent; } return false; };
-      const chosen: number[] = []; for (const c of cands) { if (chosen.length >= a.limit) break; if (!chosen.some((x) => anc(x, c) || anc(c, x))) chosen.push(c); }
-      return chosen.map((k) => ({ item: item(k), size: own(k), files: sz.get(k)![1] }));
+      const m = new Map<number, [number, number]>();
+      for (const i of sub(n)) if (!nodes[i].dir && nodes[i].ext === want) { const v = m.get(nodes[i].parent) ?? [0, 0]; v[0] += nodes[i].size; v[1]++; m.set(nodes[i].parent, v); }
+      return [...m].sort((x, y) => y[1][0] - x[1][0]).slice(0, a.limit).map(([k, v]) => ({ item: item(k), size: v[0], files: v[1] }));
     }
     case "search": { const q = String(a.pattern).toLowerCase().replace(/\*/g, ""); return [...sub(n)].filter((i) => i && nodes[i].name.toLowerCase().includes(q)).sort((x, y) => nodes[y].total - nodes[x].total).slice(0, a.limit).map(item); }
     case "cleanup_candidates": {
