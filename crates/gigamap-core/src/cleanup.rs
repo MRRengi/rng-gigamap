@@ -22,6 +22,7 @@ pub struct Candidate {
     pub kind: &'static str,
     pub why: &'static str,
     pub safety: Safety,
+    pub is_dir: bool,
 }
 
 struct Rule {
@@ -114,6 +115,7 @@ pub fn candidates(idx: &Index, scope: NodeId, min_size: u64) -> Vec<Candidate> {
                         kind: r.kind,
                         why: r.why,
                         safety: r.safety,
+                        is_dir: true,
                     });
                     matched = true;
                     break;
@@ -128,6 +130,7 @@ pub fn candidates(idx: &Index, scope: NodeId, min_size: u64) -> Vec<Candidate> {
                             kind,
                             why,
                             safety: *safety,
+                            is_dir: false,
                         });
                     }
                 }

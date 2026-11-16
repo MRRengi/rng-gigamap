@@ -8,12 +8,14 @@ use gigamap_core::requests::{self, DeleteRequest};
 use gigamap_core::{ipc, mft, snapshot, walk, Index, NodeId};
 use serde::Serialize;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
+/// Only the current index lives in memory; older scans stay on disk until Growth asks.
 #[derive(Default)]
 struct AppState {
     idx: RwLock<Option<Arc<Index>>>,
-    prev: RwLock<Option<Arc<Index>>>,
+    scanning: AtomicBool,
 }
 
 type St<'a> = tauri::State<'a, AppState>;
@@ -105,6 +107,37 @@ struct ScanInfo {
     volume_free: u64,
     scanned_at: i64,
     has_previous: bool,
+    skipped: u32,
+    from_snapshot: bool,
+}
+
+fn info_of(idx: &Index, via_service: bool, from_snapshot: bool) -> ScanInfo {
+    let has_previous = snapshot::list(&snapshot::dir_for(&snapshot::default_base(), &idx.root_path))
+        .iter()
+        .any(|(ts, _)| *ts < idx.scanned_at);
+    ScanInfo {
+        root: idx.root_path.clone(),
+        total: idx.total_size[0],
+        alloc: idx.total_alloc[0],
+        files: idx.file_count[0],
+        items: idx.len(),
+        scan_ms: idx.scan_ms,
+        method: format!("{:?}", idx.method.unwrap_or(gigamap_core::ScanMethod::Walk)),
+        via_service,
+        volume_total: idx.volume_total,
+        volume_free: idx.volume_free,
+        scanned_at: idx.scanned_at,
+        has_previous,
+        skipped: idx.skipped,
+        from_snapshot,
+    }
+}
+
+struct ScanGuard<'a>(&'a AtomicBool);
+impl Drop for ScanGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 fn drive_letter(target: &str) -> Option<char> {
@@ -132,31 +165,55 @@ fn do_scan(target: &str) -> anyhow::Result<(Index, bool)> {
 
 #[tauri::command]
 async fn scan(target: String, st: St<'_>) -> Res<ScanInfo> {
-    let (idx, via_service) = tauri::async_runtime::spawn_blocking(move || do_scan(&target))
-        .await
-        .map_err(err)?
-        .map_err(err)?;
-    let base = snapshot::default_base();
-    let dir = snapshot::dir_for(&base, &idx.root_path);
-    let prev = snapshot::list(&dir).last().and_then(|(_, p)| snapshot::load(p).ok());
-    let _ = snapshot::store(&base, &idx, 10);
-    let info = ScanInfo {
-        root: idx.root_path.clone(),
-        total: idx.total_size[0],
-        alloc: idx.total_alloc[0],
-        files: idx.file_count[0],
-        items: idx.len(),
-        scan_ms: idx.scan_ms,
-        method: format!("{:?}", idx.method.unwrap()),
-        via_service,
-        volume_total: idx.volume_total,
-        volume_free: idx.volume_free,
-        scanned_at: idx.scanned_at,
-        has_previous: prev.is_some(),
-    };
-    *st.prev.write().unwrap() = prev.map(Arc::new);
+    if st.scanning.swap(true, Ordering::SeqCst) {
+        return Err("a scan is already running".into());
+    }
+    let _guard = ScanGuard(&st.scanning);
+    let (idx, via_service) = tauri::async_runtime::spawn_blocking(move || {
+        let (idx, svc) = do_scan(&target)?;
+        let _ = snapshot::store(&snapshot::default_base(), &idx);
+        anyhow::Ok((idx, svc))
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)?;
+    let info = info_of(&idx, via_service, false);
     *st.idx.write().unwrap() = Some(Arc::new(idx));
     Ok(info)
+}
+
+/// Open the newest saved scan of a root instantly (no disk walk). None if never scanned.
+#[tauri::command]
+async fn open_last(root: String, st: St<'_>) -> Res<Option<ScanInfo>> {
+    let loaded = tauri::async_runtime::spawn_blocking(move || {
+        let label = match drive_letter(&root) {
+            Some(l) => format!("{l}:\\"),
+            None => root.clone(),
+        };
+        snapshot::at_or_before(&snapshot::default_base(), &label, i64::MAX).and_then(|(_, p)| snapshot::load(&p).ok())
+    })
+    .await
+    .map_err(err)?;
+    let Some(idx) = loaded else { return Ok(None) };
+    let info = info_of(&idx, false, true);
+    *st.idx.write().unwrap() = Some(Arc::new(idx));
+    Ok(Some(info))
+}
+
+/// When each root was last scanned (unix seconds), for the drive list.
+#[tauri::command]
+fn last_scans(roots: Vec<String>) -> Vec<Option<i64>> {
+    let base = snapshot::default_base();
+    roots
+        .iter()
+        .map(|r| {
+            let label = match drive_letter(r) {
+                Some(l) => format!("{l}:\\"),
+                None => r.clone(),
+            };
+            snapshot::list(&snapshot::dir_for(&base, &label)).last().map(|(ts, _)| *ts)
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -228,10 +285,23 @@ fn cleanup_candidates(node: NodeId, st: St) -> Res<Vec<Candidate>> {
 }
 
 #[tauri::command]
-fn growth(st: St) -> Res<Option<Growth>> {
+async fn growth(since: String, st: St<'_>) -> Res<Option<Growth>> {
     let idx = current(&st)?;
-    let prev = st.prev.read().unwrap().clone();
-    Ok(prev.map(|p| diff::growth(&p, &idx, 20)))
+    tauri::async_runtime::spawn_blocking(move || {
+        let base = snapshot::default_base();
+        let cutoff = match since.as_str() {
+            "day" => idx.scanned_at - 86_400,
+            "week" => idx.scanned_at - 7 * 86_400,
+            "month" => idx.scanned_at - 30 * 86_400,
+            _ => idx.scanned_at - 1,
+        };
+        let old = snapshot::at_or_before(&base, &idx.root_path, cutoff)
+            .or_else(|| (since != "last").then(|| snapshot::list(&snapshot::dir_for(&base, &idx.root_path)).into_iter().find(|(t, _)| *t < idx.scanned_at)).flatten())
+            .and_then(|(_, p)| snapshot::load(&p).ok());
+        old.map(|o| diff::growth(&o, &idx, 25))
+    })
+    .await
+    .map_err(err)
 }
 
 #[tauri::command]
@@ -298,6 +368,9 @@ fn shell_select(path: &str) -> bool {
 
 #[tauri::command]
 fn recycle(paths: Vec<String>) -> Res<()> {
+    for p in &paths {
+        requests::check_path(p).map_err(err)?;
+    }
     requests::recycle(&paths).map_err(err)
 }
 
@@ -313,10 +386,13 @@ fn resolve_request(id: String, approve: bool) -> Res<DeleteRequest> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             list_drives,
             scan,
+            open_last,
+            last_scans,
             tree,
             children,
             item,

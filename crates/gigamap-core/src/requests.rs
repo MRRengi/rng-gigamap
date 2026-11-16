@@ -14,7 +14,12 @@ pub enum State {
     Declined,
     Done,
     Failed,
+    /// Nobody answered within a day; never acted on.
+    Expired,
 }
+
+/// Pending requests older than this are never shown or executed.
+pub const EXPIRE_SECS: i64 = 24 * 3600;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DeleteRequest {
@@ -35,28 +40,92 @@ pub fn dir() -> PathBuf {
     base.join("requests")
 }
 
-fn file(id: &str) -> PathBuf {
-    dir().join(format!("{id}.json"))
+fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+fn file(id: &str) -> Result<PathBuf> {
+    anyhow::ensure!(valid_id(id), "bad request id");
+    Ok(dir().join(format!("{id}.json")))
+}
+
+/// Refuse anything that must never be bulk-deleted on an agent's say-so: relative paths,
+/// wildcards (the shell would expand them), drive roots, Windows and Program Files,
+/// the user profile root, NTFS metadata, and paths that do not exist.
+pub fn check_path(p: &str) -> Result<()> {
+    let t = p.trim();
+    anyhow::ensure!(!t.is_empty(), "empty path");
+    anyhow::ensure!(!t.contains(['*', '?', '"', '<', '>', '|']), "wildcards and special characters are not allowed: {t}");
+    let path = std::path::Path::new(t);
+    anyhow::ensure!(path.is_absolute(), "path must be absolute: {t}");
+    anyhow::ensure!(path.components().all(|c| !matches!(c, std::path::Component::ParentDir)), "'..' is not allowed: {t}");
+    anyhow::ensure!(path.parent().is_some() && path.file_name().is_some(), "refusing a drive root: {t}");
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    anyhow::ensure!(!(name.starts_with('$') && is_root_child(path)), "refusing NTFS metadata or a system folder: {t}");
+    let lower = t.trim_end_matches(['\\', '/']).to_ascii_lowercase();
+    let protected = ["\\windows", "\\program files", "\\program files (x86)", "\\programdata", "\\users", "\\system volume information", "\\recovery", "\\boot"];
+    if is_root_child(path) {
+        let tail = &lower[lower.find(['\\', '/']).unwrap_or(0)..].replace('/', "\\");
+        anyhow::ensure!(!protected.contains(&tail.as_str()), "refusing a system folder: {t}");
+    }
+    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+        let h = home.to_string_lossy().trim_end_matches(['\\', '/']).to_ascii_lowercase();
+        anyhow::ensure!(lower != h, "refusing the user profile folder: {t}");
+    }
+    anyhow::ensure!(std::fs::symlink_metadata(path).is_ok(), "does not exist: {t}");
+    Ok(())
+}
+
+fn is_root_child(p: &std::path::Path) -> bool {
+    p.parent().is_some_and(|q| q.parent().is_none())
 }
 
 pub fn submit(paths: Vec<String>, sizes: Vec<u64>, reason: &str) -> Result<DeleteRequest> {
+    anyhow::ensure!(!paths.is_empty() && paths.len() <= 200, "send between 1 and 200 paths");
+    for p in &paths {
+        check_path(p)?;
+    }
     std::fs::create_dir_all(dir())?;
+    cleanup_old();
     let now = crate::index::now_unix();
-    let id = format!("{now}-{:04x}", std::process::id() as u16 ^ (now as u16).rotate_left(5));
-    let r = DeleteRequest { id, paths, sizes, reason: reason.to_string(), created: now, state: State::Pending, message: String::new() };
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+    let id = format!("{now}-{:08x}", nanos ^ std::process::id().rotate_left(16));
+    let reason: String = reason.chars().take(300).collect();
+    let r = DeleteRequest { id, paths, sizes, reason, created: now, state: State::Pending, message: String::new() };
     write(&r)?;
     Ok(r)
 }
 
+/// Mark stale pending requests as expired and drop answered ones older than a week.
+pub fn cleanup_old() {
+    let now = crate::index::now_unix();
+    for e in std::fs::read_dir(dir()).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
+        let Some(mut r) = std::fs::read(&p).ok().and_then(|b| serde_json::from_slice::<DeleteRequest>(&b).ok()) else {
+            continue;
+        };
+        if r.state == State::Pending && now - r.created > EXPIRE_SECS {
+            r.state = State::Expired;
+            let _ = write(&r);
+        } else if r.state != State::Pending && now - r.created > 7 * 86_400 {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+}
+
 pub fn write(r: &DeleteRequest) -> Result<()> {
-    let tmp = file(&r.id).with_extension("tmp");
+    let f = file(&r.id)?;
+    let tmp = f.with_extension("tmp");
     std::fs::write(&tmp, serde_json::to_vec_pretty(r)?)?;
-    std::fs::rename(tmp, file(&r.id))?;
+    std::fs::rename(tmp, f)?;
     Ok(())
 }
 
 pub fn get(id: &str) -> Result<DeleteRequest> {
-    let b = std::fs::read(file(id)).with_context(|| format!("no request {id}"))?;
+    let b = std::fs::read(file(id)?).with_context(|| format!("no request {id}"))?;
     Ok(serde_json::from_slice(&b)?)
 }
 
@@ -67,7 +136,7 @@ pub fn pending() -> Vec<DeleteRequest> {
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .filter_map(|e| serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok())
-        .filter(|r: &DeleteRequest| r.state == State::Pending)
+        .filter(|r: &DeleteRequest| r.state == State::Pending && crate::index::now_unix() - r.created <= EXPIRE_SECS)
         .collect();
     v.sort_by_key(|r| r.created);
     v
@@ -79,6 +148,11 @@ pub fn resolve(id: &str, approve: bool) -> Result<DeleteRequest> {
     if r.state != State::Pending {
         return Ok(r);
     }
+    if crate::index::now_unix() - r.created > EXPIRE_SECS {
+        r.state = State::Expired;
+        write(&r)?;
+        return Ok(r);
+    }
     if !approve {
         r.state = State::Declined;
         write(&r)?;
@@ -86,7 +160,8 @@ pub fn resolve(id: &str, approve: bool) -> Result<DeleteRequest> {
     }
     r.state = State::Approved;
     write(&r)?;
-    match recycle(&r.paths) {
+    let checked: Result<()> = r.paths.iter().try_for_each(|p| check_path(p));
+    match checked.and_then(|_| recycle(&r.paths)) {
         Ok(()) => r.state = State::Done,
         Err(e) => {
             r.state = State::Failed;
@@ -145,4 +220,29 @@ pub fn recycle(paths: &[String]) -> Result<()> {
 #[cfg(not(windows))]
 pub fn recycle(_paths: &[String]) -> Result<()> {
     anyhow::bail!("Recycle Bin is only supported on Windows")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_path;
+
+    #[test]
+    fn refuses_dangerous_paths() {
+        let tmp = std::env::temp_dir().join(format!("gm-req-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let ok = tmp.join("cache");
+        std::fs::create_dir_all(&ok).unwrap();
+        assert!(check_path(ok.to_str().unwrap()).is_ok());
+        assert!(check_path(&format!("{}/*", tmp.display())).is_err());
+        assert!(check_path("relative/dir").is_err());
+        assert!(check_path("/").is_err());
+        assert!(check_path(&format!("{}/missing", tmp.display())).is_err());
+        assert!(check_path(&format!("{}/../etc", tmp.display())).is_err());
+        assert!(check_path("/$Extend").is_err());
+        if cfg!(windows) {
+            assert!(check_path("C:\\Windows").is_err());
+            assert!(check_path("C:\\").is_err());
+        }
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }

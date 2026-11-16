@@ -120,24 +120,37 @@ pub fn apply_fixup(rec: &mut [u8]) -> bool {
     true
 }
 
+/// One parsed FILE record, kept small: millions of these live at once during a scan.
 #[derive(Default, Debug)]
 pub struct Rec {
     pub number: u32,
+    /// Base record for extension records, 0 for base records.
     pub base: u64,
+    pub seq: u16,
     pub is_dir: bool,
     pub attrs: u32,
     pub mtime: i64,
-    /// (parent record, namespace, name)
-    pub names: Vec<(u64, u8, String)>,
+    /// Best name seen so far (Win32 over POSIX over DOS) and its parent reference.
+    pub name: Box<str>,
+    pub name_rank: u8,
+    pub parent: u64,
+    pub parent_seq: u16,
     pub size: u64,
     pub alloc: u64,
-    /// $DATA runs of the unnamed stream (only kept when asked).
-    pub data_runs: Vec<Run>,
-    pub data_size: u64,
+}
+
+pub const NO_NAME: u8 = u8::MAX;
+
+fn name_rank(ns: u8) -> u8 {
+    match ns {
+        1 | 3 => 0,
+        0 => 1,
+        _ => 2,
+    }
 }
 
 /// Parse one FILE record (fixups already applied). None if unused/invalid.
-pub fn parse_record(rec: &[u8], keep_runs: bool) -> Option<Rec> {
+pub fn parse_record(rec: &[u8]) -> Option<Rec> {
     if rec.len() < 0x30 || &rec[0..4] != b"FILE" {
         return None;
     }
@@ -148,21 +161,12 @@ pub fn parse_record(rec: &[u8], keep_runs: bool) -> Option<Rec> {
     let mut r = Rec {
         number: u32le(rec, 0x2C),
         base: u64le(rec, 0x20) & 0x0000_FFFF_FFFF_FFFF,
+        seq: u16le(rec, 0x10),
         is_dir: flags & 2 != 0,
+        name_rank: NO_NAME,
         ..Default::default()
     };
-    let mut p = u16le(rec, 0x14) as usize;
-    while p + 16 <= rec.len() {
-        let typ = u32le(rec, p);
-        if typ == 0xFFFF_FFFF {
-            break;
-        }
-        let len = u32le(rec, p + 4) as usize;
-        if len < 16 || p + len > rec.len() {
-            break;
-        }
-        let a = &rec[p..p + len];
-        let nonres = a[8] != 0;
+    for (typ, nonres, a) in attributes(rec) {
         let name_len = a[9] as usize;
         let aflags = u16le(a, 0x0C);
         match (typ, nonres) {
@@ -177,12 +181,15 @@ pub fn parse_record(rec: &[u8], keep_runs: bool) -> Option<Rec> {
             (0x30, false) => {
                 if let Some(v) = resident_value(a) {
                     if v.len() >= 0x42 {
-                        let parent = u64le(v, 0) & 0x0000_FFFF_FFFF_FFFF;
+                        let pref = u64le(v, 0);
                         let nl = v[0x40] as usize;
-                        let ns = v[0x41];
-                        if v.len() >= 0x42 + nl * 2 {
+                        let rank = name_rank(v[0x41]);
+                        if rank < r.name_rank && v.len() >= 0x42 + nl * 2 {
                             let units: Vec<u16> = (0..nl).map(|i| u16le(v, 0x42 + i * 2)).collect();
-                            r.names.push((parent, ns, String::from_utf16_lossy(&units)));
+                            r.name = String::from_utf16_lossy(&units).into_boxed_str();
+                            r.name_rank = rank;
+                            r.parent = pref & 0x0000_FFFF_FFFF_FFFF;
+                            r.parent_seq = (pref >> 48) as u16;
                         }
                     }
                 }
@@ -192,13 +199,7 @@ pub fn parse_record(rec: &[u8], keep_runs: bool) -> Option<Rec> {
                 if named && r.number == BADCLUS_RECORD {
                     // $BadClus:$Bad is a sparse stream as big as the volume.
                 } else if !nonres {
-                    let vlen = u32le(a, 0x10) as u64;
-                    if !named {
-                        r.size += vlen;
-                        r.data_size = vlen;
-                    } else {
-                        r.size += vlen;
-                    }
+                    r.size += u32le(a, 0x10) as u64;
                 } else if a.len() >= 0x40 && u64le(a, 0x10) == 0 {
                     let alloc_sz = u64le(a, 0x28);
                     let real = u64le(a, 0x30);
@@ -213,12 +214,6 @@ pub fn parse_record(rec: &[u8], keep_runs: bool) -> Option<Rec> {
                     if !named || aflags & 0x8000 == 0 {
                         r.size += real;
                     }
-                    if !named {
-                        r.data_size = real;
-                        if keep_runs && runlist_off < a.len() {
-                            r.data_runs = parse_runs(&a[runlist_off..]);
-                        }
-                    }
                 }
             }
             (0xA0, true) => {
@@ -228,9 +223,85 @@ pub fn parse_record(rec: &[u8], keep_runs: bool) -> Option<Rec> {
             }
             _ => {}
         }
-        p += len;
     }
     Some(r)
+}
+
+/// Walk the attributes of a FILE record: (type, non-resident, bytes).
+fn attributes(rec: &[u8]) -> impl Iterator<Item = (u32, bool, &[u8])> {
+    let mut p = u16le(rec, 0x14) as usize;
+    std::iter::from_fn(move || {
+        if p + 16 > rec.len() {
+            return None;
+        }
+        let typ = u32le(rec, p);
+        let len = u32le(rec, p + 4) as usize;
+        if typ == 0xFFFF_FFFF || len < 16 || p + len > rec.len() {
+            return None;
+        }
+        let a = &rec[p..p + len];
+        p += len;
+        Some((typ, a[8] != 0, a))
+    })
+}
+
+/// What we need from the `$MFT`/`$Bitmap` records themselves: the unnamed `$DATA`
+/// runs (with their starting VCN) and the attribute list, if the stream is split.
+#[derive(Default, Debug)]
+pub struct DataInfo {
+    pub start_vcn: u64,
+    pub runs: Vec<Run>,
+    pub size: u64,
+    /// (attribute type, start VCN, record number) from `$ATTRIBUTE_LIST`.
+    pub attr_list: Vec<(u32, u64, u64)>,
+    /// Non-resident attribute list runs and length, if the list itself is not resident.
+    pub attr_list_runs: Option<(Vec<Run>, u64)>,
+}
+
+pub fn parse_data_info(rec: &[u8]) -> DataInfo {
+    let mut d = DataInfo::default();
+    for (typ, nonres, a) in attributes(rec) {
+        match (typ, nonres) {
+            (0x80, true) if a[9] == 0 && a.len() >= 0x40 => {
+                let start = u64le(a, 0x10);
+                let off = u16le(a, 0x20) as usize;
+                if start == 0 {
+                    d.size = u64le(a, 0x30);
+                }
+                if d.runs.is_empty() && off < a.len() {
+                    d.start_vcn = start;
+                    d.runs = parse_runs(&a[off..]);
+                }
+            }
+            (0x20, false) => {
+                if let Some(v) = resident_value(a) {
+                    d.attr_list = parse_attr_list(v);
+                }
+            }
+            (0x20, true) if a.len() >= 0x40 => {
+                let off = u16le(a, 0x20) as usize;
+                if off < a.len() {
+                    d.attr_list_runs = Some((parse_runs(&a[off..]), u64le(a, 0x30)));
+                }
+            }
+            _ => {}
+        }
+    }
+    d
+}
+
+pub fn parse_attr_list(v: &[u8]) -> Vec<(u32, u64, u64)> {
+    let mut out = Vec::new();
+    let mut p = 0usize;
+    while p + 0x1A <= v.len() {
+        let len = u16le(v, p + 4) as usize;
+        if len < 0x1A || p + len > v.len() {
+            break;
+        }
+        out.push((u32le(v, p), u64le(v, p + 8), u64le(v, p + 0x10) & 0x0000_FFFF_FFFF_FFFF));
+        p += len;
+    }
+    out
 }
 
 fn resident_value(a: &[u8]) -> Option<&[u8]> {
@@ -275,12 +346,102 @@ impl<R: Read + Seek + Send> Volume<R> {
         Ok(buf)
     }
 
-    fn head_record(head: &[u8], n: u64, rs: usize) -> Result<Rec> {
+    fn head_record(head: &[u8], n: u64, rs: usize) -> Result<Vec<u8>> {
         let mut rec = head[n as usize * rs..(n as usize + 1) * rs].to_vec();
-        if !apply_fixup(&mut rec) {
+        if !apply_fixup(&mut rec) || &rec[0..4] != b"FILE" {
             bail!("record {n} failed fixup");
         }
-        parse_record(&rec, true).with_context(|| format!("record {n} unreadable"))
+        Ok(rec)
+    }
+
+    /// Read `len` bytes of a non-resident stream described by `runs`.
+    fn read_stream(&mut self, runs: &[Run], len: u64) -> Result<Vec<u8>> {
+        let cs = self.boot.cluster_size;
+        let mut out = Vec::with_capacity(len as usize);
+        for run in runs {
+            if out.len() as u64 >= len {
+                break;
+            }
+            let bytes = (run.clusters * cs) as usize;
+            match run.lcn {
+                None => out.resize(out.len() + bytes, 0),
+                Some(lcn) => {
+                    let mut buf = vec![0u8; bytes];
+                    self.r.seek(SeekFrom::Start(lcn * cs))?;
+                    read_full(&mut self.r, &mut buf)?;
+                    out.extend_from_slice(&buf);
+                }
+            }
+        }
+        out.truncate(len as usize);
+        Ok(out)
+    }
+
+    /// Read one MFT record by number, using the runs known so far.
+    fn read_record(&mut self, runs: &[Run], n: u64) -> Result<Vec<u8>> {
+        let cs = self.boot.cluster_size;
+        let rs = self.boot.record_size as u64;
+        let byte = n * rs;
+        let mut vcn_byte = 0u64;
+        for run in runs {
+            let len = run.clusters * cs;
+            if byte < vcn_byte + len {
+                let lcn = run.lcn.with_context(|| format!("record {n} is in a sparse run"))?;
+                let within = byte - vcn_byte;
+                // Read whole clusters: raw volumes only accept sector-aligned reads.
+                let start = lcn * cs + within / cs * cs;
+                let span = ((within % cs) + rs).div_ceil(cs) * cs;
+                let mut buf = vec![0u8; span as usize];
+                self.r.seek(SeekFrom::Start(start))?;
+                read_full(&mut self.r, &mut buf)?;
+                let o = (within % cs) as usize;
+                let mut rec = buf[o..o + rs as usize].to_vec();
+                if !apply_fixup(&mut rec) || &rec[0..4] != b"FILE" {
+                    bail!("record {n} failed fixup");
+                }
+                return Ok(rec);
+            }
+            vcn_byte += len;
+        }
+        bail!("record {n} is outside the known MFT runs")
+    }
+
+    /// The full run list of `$MFT`, following `$ATTRIBUTE_LIST` when the stream is split
+    /// across extension records (heavily fragmented MFTs).
+    fn mft_runs(&mut self, head: &[u8]) -> Result<(Vec<Run>, u64)> {
+        let rs = self.boot.record_size;
+        let rec0 = Self::head_record(head, 0, rs)?;
+        let mut info = parse_data_info(&rec0);
+        if info.runs.is_empty() {
+            bail!("$MFT has no data runs");
+        }
+        if let Some((runs, len)) = info.attr_list_runs.take() {
+            let bytes = self.read_stream(&runs, len)?;
+            info.attr_list = parse_attr_list(&bytes);
+        }
+        let mut pieces: Vec<(u64, Vec<Run>)> = vec![(info.start_vcn, info.runs.clone())];
+        let mut extra: Vec<(u64, u64)> = info
+            .attr_list
+            .iter()
+            .filter(|(t, vcn, rec)| *t == 0x80 && *rec != 0 && *vcn != 0)
+            .map(|(_, vcn, rec)| (*vcn, *rec))
+            .collect();
+        extra.sort_unstable();
+        extra.dedup();
+        for (_, recno) in extra {
+            let known: Vec<Run> = {
+                let mut v: Vec<(u64, Vec<Run>)> = pieces.clone();
+                v.sort_by_key(|p| p.0);
+                v.into_iter().flat_map(|p| p.1).collect()
+            };
+            let rec = self.read_record(&known, recno)?;
+            let d = parse_data_info(&rec);
+            if !d.runs.is_empty() {
+                pieces.push((d.start_vcn, d.runs));
+            }
+        }
+        pieces.sort_by_key(|p| p.0);
+        Ok((pieces.into_iter().flat_map(|p| p.1).collect(), info.size))
     }
 
     /// Count free space from $Bitmap.
@@ -288,11 +449,11 @@ impl<R: Read + Seek + Send> Volume<R> {
         let rs = self.boot.record_size;
         let cs = self.boot.cluster_size;
         let head = self.read_head_records()?;
-        let bm = Self::head_record(&head, BITMAP_RECORD, rs)?;
+        let bm = parse_data_info(&Self::head_record(&head, BITMAP_RECORD, rs)?);
         let total_clusters = self.boot.total_bytes / cs;
         let mut used: u64 = 0;
         let mut bits_left = total_clusters;
-        for run in &bm.data_runs {
+        for run in &bm.runs {
             let Some(lcn) = run.lcn else { continue };
             let mut remaining = run.clusters * cs;
             let mut pos = lcn * cs;
@@ -324,15 +485,10 @@ impl<R: Read + Seek + Send> Volume<R> {
         let cs = self.boot.cluster_size;
         let free = self.free_bytes().unwrap_or(0);
         let head = self.read_head_records()?;
-        let mft = Self::head_record(&head, 0, rs)?;
-        if mft.data_runs.is_empty() {
-            bail!("$MFT has no data runs");
-        }
-        let total_records = (mft.data_size / rs as u64) as usize;
+        let (runs, mft_size) = self.mft_runs(&head)?;
+        let total_records = (mft_size / rs as u64) as usize;
         let mut recs: Vec<Option<Rec>> = Vec::new();
         recs.resize_with(total_records, || None);
-
-        let runs = mft.data_runs.clone();
         let (tx, rx) = crossbeam_channel::bounded::<(usize, Vec<u8>)>(2);
         let reader = &mut self.r;
         std::thread::scope(|s| -> Result<()> {
@@ -369,7 +525,7 @@ impl<R: Read + Seek + Send> Volume<R> {
                         if chunk.len() < rs || !apply_fixup(chunk) {
                             return None;
                         }
-                        parse_record(chunk, false)
+                        parse_record(chunk)
                     })
                     .collect();
                 for (i, r) in parsed.into_iter().enumerate() {
@@ -393,9 +549,16 @@ impl<R: Read + Seek + Send> Volume<R> {
             if let Some(Some(base)) = recs.get_mut(b) {
                 base.size += e.size;
                 base.alloc += e.alloc;
-                base.names.extend(e.names);
+                if e.name_rank < base.name_rank {
+                    base.name = e.name;
+                    base.name_rank = e.name_rank;
+                    base.parent = e.parent;
+                    base.parent_seq = e.parent_seq;
+                }
             }
         }
+        // Sequence numbers let us spot a parent reference that points at a reused record.
+        let seq_of: Vec<u16> = recs.iter().map(|r| r.as_ref().map_or(0, |r| r.seq)).collect();
 
         let mut b = IndexBuilder::new(root_path, sep, ScanMethod::Mft);
         b.reserve(total_records, total_records * 16);
@@ -407,10 +570,12 @@ impl<R: Read + Seek + Send> Volume<R> {
         let mut parent_rec: Vec<u64> = vec![0];
         for (i, slot) in recs.iter().enumerate() {
             let Some(r) = slot else { continue };
-            if i as u64 == ROOT_RECORD {
+            if i as u64 == ROOT_RECORD || r.name_rank == NO_NAME {
                 continue;
             }
-            let Some((parent, name)) = pick_name(&r.names) else { continue };
+            let stale = r.parent_seq != 0 && seq_of.get(r.parent as usize).is_some_and(|&s| s != 0 && s != r.parent_seq);
+            let parent = if stale { ROOT_RECORD } else { r.parent };
+            let name: &str = &r.name;
             let mut fl = 0u8;
             if r.is_dir {
                 fl |= flag::DIR;
@@ -441,19 +606,6 @@ impl<R: Read + Seek + Send> Volume<R> {
         b.idx.volume_free = free;
         Ok(b.finish(started))
     }
-}
-
-/// Prefer Win32 names, then POSIX, then DOS 8.3.
-fn pick_name(names: &[(u64, u8, String)]) -> Option<(u64, &str)> {
-    let rank = |ns: u8| match ns {
-        1 | 3 => 0,
-        0 => 1,
-        _ => 2,
-    };
-    names
-        .iter()
-        .min_by_key(|(_, ns, _)| rank(*ns))
-        .map(|(p, _, n)| (*p, n.as_str()))
 }
 
 fn read_full<R: Read>(r: &mut R, buf: &mut [u8]) -> Result<()> {
@@ -512,5 +664,18 @@ mod tests {
         assert_eq!(r[1].lcn, Some(0x5634 - 0x10));
         assert_eq!(r[2].lcn, None);
         assert_eq!(r[2].clusters, 4);
+    }
+
+    #[test]
+    fn attr_list_entries() {
+        let mut v = vec![0u8; 0x40];
+        v[0..4].copy_from_slice(&0x80u32.to_le_bytes());
+        v[4..6].copy_from_slice(&0x20u16.to_le_bytes());
+        v[8..16].copy_from_slice(&1234u64.to_le_bytes());
+        v[0x10..0x18].copy_from_slice(&(17u64 | (3u64 << 48)).to_le_bytes());
+        v[0x20..0x24].copy_from_slice(&0x30u32.to_le_bytes());
+        v[0x24..0x26].copy_from_slice(&0x20u16.to_le_bytes());
+        let l = parse_attr_list(&v);
+        assert_eq!(l, vec![(0x80, 1234, 17), (0x30, 0, 0)]);
     }
 }

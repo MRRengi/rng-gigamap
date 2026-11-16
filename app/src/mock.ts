@@ -115,7 +115,11 @@ export async function mockInvoke(cmd: string, a: Record<string, any>): Promise<u
       { root: "D:\\", label: "Projects", total: 2048 * GB, free: 1210 * GB, fs: "NTFS" },
       { root: "E:\\", label: "SD card", total: 256 * GB, free: 201 * GB, fs: "exFAT" },
     ];
-    case "scan": return { root: "C:\\", total: nodes[0].total, alloc: nodes[0].total, files: nodes[0].files, items: nodes.length, scan_ms: 1840, method: "Mft", via_service: true, volume_total: volume, volume_free: volume - nodes[0].total - 38 * GB, scanned_at: Date.now() / 1000, has_previous: true };
+    case "open_last": return String(a.root).startsWith("C") ? { root: "C:\\", total: nodes[0].total, alloc: nodes[0].total, files: nodes[0].files, items: nodes.length, scan_ms: 1840, method: "Mft", via_service: true, volume_total: volume, volume_free: volume - nodes[0].total - 38 * GB, scanned_at: Date.now() / 1000 - 3 * 3600, has_previous: true, skipped: 0, from_snapshot: true } : null;
+    case "last_scans": return (a.roots as string[]).map((r, k) => (k === 0 ? Date.now() / 1000 - 3 * 3600 : null));
+    case "recycle": return null;
+    case "reveal": return null;
+    case "scan": return { root: "C:\\", total: nodes[0].total, alloc: nodes[0].total, files: nodes[0].files, items: nodes.length, scan_ms: 1840, method: "Mft", via_service: true, volume_total: volume, volume_free: volume - nodes[0].total - 38 * GB, scanned_at: Date.now() / 1000, has_previous: true, skipped: 0, from_snapshot: false };
     case "tree": return slice(n, a.maxNodes);
     case "children": return nodes[n].kids.slice(0, a.limit).map(item);
     case "item": return item(n);
@@ -132,7 +136,7 @@ export async function mockInvoke(cmd: string, a: Record<string, any>): Promise<u
     case "search": { const q = String(a.pattern).toLowerCase().replace(/\*/g, ""); return [...sub(n)].filter((i) => i && nodes[i].name.toLowerCase().includes(q)).sort((x, y) => nodes[y].total - nodes[x].total).slice(0, a.limit).map(item); }
     case "cleanup_candidates": {
       const rules: [string, string, string, string][] = [["Library", "Unity Library", "Unity rebuilds it on project open", "Safe"], ["node_modules", "Node packages", "reinstalled by npm install", "Safe"], ["target", "Rust target", "cargo build output", "Safe"], ["Cache", "Browser cache", "browser re-downloads it", "Safe"], ["_cacache", "npm cache", "re-downloaded on demand", "Safe"], ["Temp", "Temp files", "temporary files", "Review"], ["Download", "Windows Update cache", "old update packages", "Review"], ["Builds", "Unity builds", "old player builds", "Review"], ["$Recycle.Bin", "Recycle Bin", "already deleted files", "Review"], ["hiberfil.sys", "Hibernation file", "managed by Windows (powercfg /h off)", "System"], ["pagefile.sys", "Page file", "managed by Windows", "System"]];
-      const out = []; for (const i of sub(n)) { const rr = rules.find((x) => x[0] === nodes[i].name); if (rr) out.push({ id: i, path: path(i), size: nodes[i].total, kind: rr[1], why: rr[2], safety: rr[3] }); }
+      const out = []; for (const i of sub(n)) { const rr = rules.find((x) => x[0] === nodes[i].name); if (rr) out.push({ id: i, path: path(i), size: nodes[i].total, kind: rr[1], why: rr[2], safety: rr[3], is_dir: nodes[i].dir }); }
       return out.sort((x, y) => y.size - x.size);
     }
     case "growth": {

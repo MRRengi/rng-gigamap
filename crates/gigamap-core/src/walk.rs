@@ -5,6 +5,7 @@ use crate::index::{flag, Index, IndexBuilder, NodeId, ScanMethod};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -25,16 +26,21 @@ pub fn scan(root: &Path) -> Result<Index> {
     let sep = if cfg!(windows) { '\\' } else { '/' };
     let builder = Mutex::new(IndexBuilder::new(&root_str, sep, ScanMethod::Walk));
     builder.lock().unwrap().idx.mtime[0] = mtime_of(&meta);
-    rayon::scope(|s| visit(s, &builder, root.to_path_buf(), 0));
+    let skipped = AtomicU32::new(0);
+    rayon::scope(|s| visit(s, &builder, &skipped, root.to_path_buf(), 0));
     let mut b = builder.into_inner().unwrap();
+    b.idx.skipped = skipped.into_inner();
     let (total, free) = volume_space(root);
     b.idx.volume_total = total;
     b.idx.volume_free = free;
     Ok(b.finish(started))
 }
 
-fn visit<'s>(s: &rayon::Scope<'s>, builder: &'s Mutex<IndexBuilder>, dir: PathBuf, id: NodeId) {
-    let Ok(rd) = fs::read_dir(&dir) else { return };
+fn visit<'s>(s: &rayon::Scope<'s>, builder: &'s Mutex<IndexBuilder>, skipped: &'s AtomicU32, dir: PathBuf, id: NodeId) {
+    let Ok(rd) = fs::read_dir(&dir) else {
+        skipped.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
     let mut entries: Vec<Entry> = Vec::new();
     for de in rd.flatten() {
         let Ok(ft) = de.file_type() else { continue };
@@ -67,7 +73,7 @@ fn visit<'s>(s: &rayon::Scope<'s>, builder: &'s Mutex<IndexBuilder>, dir: PathBu
         }
     }
     for (p, child) in subdirs {
-        s.spawn(move |s| visit(s, builder, p, child));
+        s.spawn(move |s| visit(s, builder, skipped, p, child));
     }
 }
 

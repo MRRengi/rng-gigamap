@@ -112,18 +112,40 @@ pub fn list(dir: &Path) -> Vec<(i64, PathBuf)> {
     v
 }
 
-/// Save a new snapshot and keep the newest `keep`.
-pub fn store(base: &Path, idx: &Index, keep: usize) -> Result<PathBuf> {
+/// Save a new snapshot, then thin out history: the 2 newest always stay, plus the
+/// newest per day for a week and the newest per week for five weeks. Full snapshots
+/// of a big drive are tens of megabytes, so ten in a row would waste real space.
+pub fn store(base: &Path, idx: &Index) -> Result<PathBuf> {
     let dir = dir_for(base, &idx.root_path);
     let p = dir.join(format!("{}.gmap", idx.scanned_at));
     save(idx, &p)?;
-    let all = list(&dir);
-    if all.len() > keep {
-        for (_, old) in &all[..all.len() - keep] {
-            std::fs::remove_file(old).ok();
-        }
+    for old in to_prune(&list(&dir), idx.scanned_at) {
+        std::fs::remove_file(old).ok();
     }
     Ok(p)
+}
+
+fn to_prune(all: &[(i64, PathBuf)], now: i64) -> Vec<PathBuf> {
+    use std::collections::HashSet;
+    let mut keep: HashSet<usize> = HashSet::new();
+    let n = all.len();
+    keep.extend(n.saturating_sub(2)..n);
+    let mut days = HashSet::new();
+    let mut weeks = HashSet::new();
+    for (i, (ts, _)) in all.iter().enumerate().rev() {
+        let age = now - ts;
+        if age <= 7 * 86_400 && days.insert(ts.div_euclid(86_400)) {
+            keep.insert(i);
+        } else if age <= 35 * 86_400 && weeks.insert(ts.div_euclid(7 * 86_400)) {
+            keep.insert(i);
+        }
+    }
+    all.iter().enumerate().filter(|(i, _)| !keep.contains(i)).map(|(_, (_, p))| p.clone()).collect()
+}
+
+/// Newest snapshot taken at or before `ts`.
+pub fn at_or_before(base: &Path, root_path: &str, ts: i64) -> Option<(i64, PathBuf)> {
+    list(&dir_for(base, root_path)).into_iter().rev().find(|(t, _)| *t <= ts)
 }
 
 pub fn default_base() -> PathBuf {
@@ -194,6 +216,29 @@ fn get_slice<T: Pod>(r: &mut impl Read, n: usize) -> Result<Vec<T>> {
     let mut b = vec![0u8; n * T::N];
     r.read_exact(&mut b)?;
     Ok(b.chunks_exact(T::N).map(T::from).collect())
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use std::path::PathBuf;
+
+    #[test]
+    fn keeps_recent_daily_weekly() {
+        let now = 100 * 86_400;
+        let mut all: Vec<(i64, PathBuf)> = Vec::new();
+        // ten scans today, one per day for 20 days before
+        for d in (1..=20).rev() {
+            all.push((now - d * 86_400, PathBuf::from(format!("d{d}"))));
+        }
+        for k in 0..10 {
+            all.push((now - 3600 + k * 60, PathBuf::from(format!("t{k}"))));
+        }
+        let pruned = super::to_prune(&all, now);
+        let kept = all.len() - pruned.len();
+        assert!(kept <= 2 + 7 + 5 + 1, "kept {kept}");
+        assert!(!pruned.contains(&PathBuf::from("t9")) && !pruned.contains(&PathBuf::from("t8")));
+        assert!(pruned.contains(&PathBuf::from("t0")));
+    }
 }
 
 #[cfg(test)]

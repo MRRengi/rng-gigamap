@@ -137,16 +137,23 @@ mod win {
         }
     }
 
+    /// One MFT scan at a time: each holds hundreds of MB while it runs.
+    static SCAN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn handle_client(file: std::fs::File) -> Result<()> {
+        use std::io::Read;
         let writer = file.try_clone()?;
         let mut line = String::new();
-        BufReader::new(file).read_line(&mut line)?;
+        BufReader::new(file.take(4096)).read_line(&mut line)?;
         let req: serde_json::Value = serde_json::from_str(line.trim())?;
         let result = match req["cmd"].as_str() {
             Some("scan") => {
                 let drive = req["drive"].as_str().and_then(|d| d.chars().next()).filter(|c| c.is_ascii_alphabetic());
                 match drive {
-                    Some(d) => mft::scan_drive(d),
+                    Some(d) => {
+                        let _guard = SCAN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                        mft::scan_drive(d)
+                    }
                     None => Err(anyhow::anyhow!("drive letter required")),
                 }
             }

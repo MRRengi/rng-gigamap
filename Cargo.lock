@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "gigamap-cli"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "gigamap-core",
@@ -137,7 +137,7 @@ dependencies = [
 
 [[package]]
 name = "gigamap-core"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "blake3",

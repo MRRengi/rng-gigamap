@@ -12,13 +12,15 @@ short answer instead of crawling your folders themselves.
 
 - **Fast.** NTFS drives are read straight from the MFT: hundreds of thousands of files per second.
   Other drives (exFAT, network shares) fall back to a parallel folder walk.
-- **Treemap** with cushion shading, zoom into any folder, breadcrumbs, search.
+- **Instant start.** Every scan is saved; picking a drive opens the last scan right away and refreshes it in the background.
+- **Treemap** with cushion shading, zoom into any folder, breadcrumbs, search, right-click menu everywhere.
+- **Any folder**, not only drives: map a project folder or a network share.
 - **Largest files and heaviest folders.** Heaviest folders never overlap, so their sizes add up.
 - **Growth.** Every scan is saved; the next scan shows which folders grew and which big files appeared.
 - **Cleanup candidates.** `node_modules`, Unity `Library`/`Temp`, cargo `target`, .NET `bin`/`obj`,
   Gradle and npm caches, browser caches, Windows Update leftovers, each marked safe / review / Windows.
 - **Duplicates.** Same-size files are compared by content (BLAKE3), biggest waste first.
-- **Recycle Bin only.** Nothing is ever deleted permanently.
+- **Recycle Bin only.** Nothing is ever deleted permanently, and drive roots, Windows and Program Files, your profile folder and wildcards are always refused.
 - **No UAC prompts.** A small Gigamap service reads the file table; the app itself runs as you.
 
 ## Install

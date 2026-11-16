@@ -5,12 +5,13 @@ export interface Drive { root: string; label: string; total: number; free: numbe
 export interface ScanInfo {
   root: string; total: number; alloc: number; files: number; items: number; scan_ms: number;
   method: string; via_service: boolean; volume_total: number; volume_free: number; scanned_at: number; has_previous: boolean;
+  skipped: number; from_snapshot: boolean;
 }
 export interface Item { id: number; path: string; name: string; is_dir: boolean; size: number; alloc: number; files: number; mtime: number }
 export interface Slice { id: number[]; parent: number[]; size: number[]; dir: number[]; name: string[]; ext: string[] }
 export interface TypeStat { ext: string; size: number; files: number }
 export interface ExtFolder { item: Item; size: number; files: number }
-export interface Candidate { id: number; path: string; size: number; kind: string; why: string; safety: "Safe" | "Review" | "System" }
+export interface Candidate { id: number; path: string; size: number; kind: string; why: string; safety: "Safe" | "Review" | "System"; is_dir: boolean }
 export interface Change { path: string; before: number; after: number; delta: number; is_new: boolean }
 export interface Growth { since: number; now: number; total_delta: number; grown: Change[]; shrunk: Change[]; new_files: Change[] }
 export interface DupeGroup { size: number; paths: string[]; wasted: number }
@@ -29,6 +30,8 @@ async function call<T>(cmd: string, args: Record<string, unknown> = {}): Promise
 export const api = {
   drives: () => call<Drive[]>("list_drives"),
   scan: (target: string) => call<ScanInfo>("scan", { target }),
+  openLast: (root: string) => call<ScanInfo | null>("open_last", { root }),
+  lastScans: (roots: string[]) => call<(number | null)[]>("last_scans", { roots }),
   tree: (node: number, maxNodes: number) => call<Slice>("tree", { node, maxNodes }),
   children: (node: number, limit: number) => call<Item[]>("children", { node, limit }),
   item: (node: number) => call<Item>("item", { node }),
@@ -39,7 +42,7 @@ export const api = {
   extFolders: (node: number, ext: string, limit: number) => call<ExtFolder[]>("ext_folders", { node, ext, limit }),
   search: (node: number, pattern: string, limit: number) => call<Item[]>("search", { node, pattern, limit }),
   cleanup: (node: number) => call<Candidate[]>("cleanup_candidates", { node }),
-  growth: () => call<Growth | null>("growth"),
+  growth: (since: string) => call<Growth | null>("growth", { since }),
   duplicates: (node: number, minMb: number) => call<DupeGroup[]>("duplicates", { node, minMb }),
   find: (path: string) => call<number | null>("find", { path }),
   reveal: (path: string) => call<void>("reveal", { path }),
@@ -56,4 +59,12 @@ export async function windowAction(a: "minimize" | "toggleMaximize" | "close" | 
   else if (a === "toggleMaximize") await w.toggleMaximize();
   else if (a === "close") await w.close();
   else await w.startDragging();
+}
+
+/** Native folder picker (Tauri dialog plugin). Null if cancelled or outside the app. */
+export async function pickFolder(): Promise<string | null> {
+  if (!inTauri) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const r = await open({ directory: true, multiple: false, title: "Choose a folder to map" });
+  return typeof r === "string" ? r : null;
 }

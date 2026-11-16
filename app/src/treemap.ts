@@ -23,6 +23,7 @@ export class Treemap {
   onHover: (i: number, x: number, y: number) => void = () => {};
   onSelect: (i: number) => void = () => {};
   onOpen: (i: number) => void = () => {};
+  onContext: (i: number, x: number, y: number) => void = () => {};
 
   constructor(private host: HTMLElement) {
     this.base = document.createElement("canvas");
@@ -47,6 +48,11 @@ export class Treemap {
       const i = this.hit(e.offsetX, e.offsetY);
       if (i >= 0) this.onSelect(i);
     });
+    this.over.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      const i = this.hit(e.offsetX, e.offsetY);
+      if (i >= 0) this.onContext(i, e.clientX, e.clientY);
+    });
     this.over.addEventListener("dblclick", (e) => {
       const i = this.hit(e.offsetX, e.offsetY);
       if (i < 0 || !this.data) return;
@@ -68,6 +74,19 @@ export class Treemap {
   select(i: number) {
     this.selected = i;
     this.paintOverlay();
+  }
+
+  /** Path of a slice node relative to the view root ("Folder › Sub › file"). */
+  trail(i: number): string {
+    const d = this.data;
+    if (!d) return "";
+    const parts: string[] = [];
+    let k = d.parent[i];
+    while (k > 0) {
+      parts.push(d.name[k]);
+      k = d.parent[k];
+    }
+    return parts.reverse().join(" › ");
   }
 
   rectOf(i: number) {

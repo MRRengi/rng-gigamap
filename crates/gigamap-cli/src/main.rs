@@ -108,7 +108,7 @@ fn run() -> Result<()> {
             let target = a.target.clone().unwrap_or_else(source::default_target);
             let idx = source::scan(&target, a.image.as_deref())?;
             if a.save {
-                let p = gigamap_core::snapshot::store(&gigamap_core::snapshot::default_base(), &idx, 10)?;
+                let p = gigamap_core::snapshot::store(&gigamap_core::snapshot::default_base(), &idx)?;
                 eprintln!("snapshot: {}", p.display());
             }
             match a.cmd.as_str() {

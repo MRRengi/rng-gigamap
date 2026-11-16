@@ -31,6 +31,8 @@ pub struct Index {
     pub scan_ms: u64,
     pub volume_total: u64,
     pub volume_free: u64,
+    /// Folders the scanner could not open (access denied); not persisted.
+    pub skipped: u32,
 
     pub parent: Vec<NodeId>,
     pub name_off: Vec<u32>,

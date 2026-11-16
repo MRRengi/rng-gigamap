@@ -120,7 +120,7 @@ impl State {
         }
         let target = Self::target_for(&path);
         let idx = source::scan(&target, None)?;
-        snapshot::store(&snapshot::default_base(), &idx, 10).ok();
+        snapshot::store(&snapshot::default_base(), &idx).ok();
         self.cache.retain(|c| !c.root_path.eq_ignore_ascii_case(&idx.root_path));
         self.cache.push(idx);
         let i = self.cache.len() - 1;
